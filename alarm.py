@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 from datetime import datetime
 import sys
 import logging
+import psutil 
 
 # Configure logging to file instead of console
 logging.basicConfig(filename='server_alarm.log', level=logging.INFO, 
@@ -187,6 +188,38 @@ def show_message_box(config):
                        padx=20, pady=10)
 
     button.place(relx=0.5, rely=0.6, anchor="center")
+
+
+    # Check if game should be auto-launched
+    auto_start = config.getboolean('Game', 'autoStart', fallback=False)
+    game_path = config.get('Game', 'path', fallback='')
+    
+    if auto_start and game_path and os.path.exists(game_path):
+            # Extract executable name from path
+            game_exe = os.path.basename(game_path)
+            
+            # Check if the game is already running
+            game_running = False
+            try:
+                for proc in psutil.process_iter(['pid', 'name']):
+                    if proc.info['name'].lower() == game_exe.lower():
+                        game_running = True
+                        logging.info(f"Game already running: {game_exe} (PID: {proc.info['pid']})")
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+            
+            # Only launch if not already running
+            if not game_running:
+                try:
+                    # Launch the game
+                    subprocess.Popen([game_path], creationflags=subprocess.CREATE_NO_WINDOW)
+                    logging.info(f"Launched game: {game_path}")
+                except Exception as e:
+                    logging.error(f"Failed to launch game: {e}")
+            else:
+                logging.info(f"Game already running, skipping launch")
+    
 
     root.mainloop()
 
