@@ -10,6 +10,8 @@ from PIL import Image, ImageDraw
 from datetime import datetime
 import sys
 import logging
+import psutil
+import socket 
 
 # Configure logging to file instead of console
 logging.basicConfig(filename='server_alarm.log', level=logging.INFO, 
@@ -188,6 +190,38 @@ def show_message_box(config):
 
     button.place(relx=0.5, rely=0.6, anchor="center")
 
+
+    # Check if game should be auto-launched
+    auto_start = config.getboolean('Game', 'autoStart', fallback=False)
+    game_path = config.get('Game', 'path', fallback='')
+    
+    if auto_start and game_path and os.path.exists(game_path):
+            # Extract executable name from path
+            game_exe = os.path.basename(game_path)
+            
+            # Check if the game is already running
+            game_running = False
+            try:
+                for proc in psutil.process_iter(['pid', 'name']):
+                    if proc.info['name'].lower() == game_exe.lower():
+                        game_running = True
+                        logging.info(f"Game already running: {game_exe} (PID: {proc.info['pid']})")
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+            
+            # Only launch if not already running
+            if not game_running:
+                try:
+                    # Launch the game
+                    subprocess.Popen([game_path], creationflags=subprocess.CREATE_NO_WINDOW)
+                    logging.info(f"Launched game: {game_path}")
+                except Exception as e:
+                    logging.error(f"Failed to launch game: {e}")
+            else:
+                logging.info(f"Game already running, skipping launch")
+    
+
     root.mainloop()
 
 def play_alarm_sound(sound_file, stop_event):
@@ -203,7 +237,7 @@ def play_alarm_sound(sound_file, stop_event):
 
 def ping_server(icon=None):
     """
-    Periodically pings the server to check if it is up.
+    Periodically checks the server to see if it is up.
     If the server is up, shows a message box with the configured message.
     The server and ping interval are configured in the 'config.ini' file.
     """
@@ -214,7 +248,14 @@ def ping_server(icon=None):
     # Get server settings from config
     server = config.get('Server', 'hostname', fallback='game.project-epoch.net:3724')
     ping_interval = int(config.get('Server', 'ping_interval', fallback='5'))
-    ping_count = config.get('Server', 'ping_count', fallback='1')
+    
+    # Parse hostname and port - add 8080 if no port specified
+    if ':' in server:
+        hostname, port_str = server.split(':', 1)
+        port = int(port_str)
+    else:
+        hostname = server
+        port = 8080  # Default port if none specified
 
     while monitoring_active:
         if not monitoring_active:
@@ -222,20 +263,22 @@ def ping_server(icon=None):
             
         # Update last ping time
         last_ping_time = datetime.now().strftime("%H:%M:%S")
-            
-        response = subprocess.run(
-            ["ping", "-n", ping_count, server],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
+        
+        # Check if port is open using socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((hostname, port))
+            sock.close()
+            server_up = result == 0
+        except Exception as e:
+            logging.error(f"Socket error: {e}")
+            server_up = False
 
-        # Log to file instead of console to avoid command prompt flash
-        logging.info(f"Pinging {server}... Response code: {response.returncode}")
+        logging.info(f"Checking {hostname}:{port}... {'Online' if server_up else 'Offline'}")
 
         # Update server status
-        if response.returncode == 0:
+        if server_up:
             server_status = "Online"
             if icon:
                 update_tray_icon(icon)
